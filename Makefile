@@ -15,6 +15,7 @@ up:
 	rm kubeconfig
 
 	kubectl apply -f ./deployment
+	kubectl rollout status deploy/subcluster --timeout=90s
 
 down:
 	kind delete cluster

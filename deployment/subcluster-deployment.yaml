@@ -20,6 +20,14 @@ spec:
       - name: cluster
         image: ghcr.io/wzshiming/kwok/cluster:v0.7.0-alpha.2-k8s.v1.31.0
         imagePullPolicy: IfNotPresent
+        args:
+        - --extra-args=kube-apiserver=advertise-address=$(POD_IP)
+        - --extra-args=kube-apiserver=service-cluster-ip-range=$(POD_IP)/12
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         livenessProbe:
           failureThreshold: 5
           httpGet:
@@ -65,13 +73,13 @@ spec:
         imagePullPolicy: IfNotPresent
         args:
         - --kubeconfig=/root/.kube/config
-        - --node-name=$(POD_NAME)
+        - --node-name=subnode
         - --source-kubeconfig=/root/.kube/source-config
         - --source-node-name=$(NODE_NAME)
         - --source-namespace=$(POD_NAMESPACE)
         - --dns-servers=$(POD_IP)
-        - --dns-searches=svc.subcluster.local
-        - --dns-searches=subcluster.local
+        - --dns-searches=svc.cluster.local
+        - --dns-searches=cluster.local
         volumeMounts:
         - mountPath: /root/.kube/config
           name: subcluster-config

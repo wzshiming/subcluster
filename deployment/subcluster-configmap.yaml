@@ -13,14 +13,14 @@ data:
     - name: kube-controller-manager
       extraArgs:
       - key: controllers
-        value: *,bootstrapsigner,tokencleaner,-service,-endpoint
+        value: '*,-cloud-node-lifecycle-controller,-endpoints-controller,-endpointslice-controller,-service-cidr-controller,-service-lb-controller,-node-ipam-controller'
   Corefile: |
     .:53 {
         health :8180
         ready :8181
         errors
 
-        kubernetes subcluster.local in-addr.arpa ip6.arpa {
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
            endpoint http://127.0.0.1:8080
            pods insecure
            fallthrough in-addr.arpa ip6.arpa
