@@ -1,0 +1,174 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: subcluster
+  name: subcluster
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subcluster
+  template:
+    metadata:
+      labels:
+        app: subcluster
+    spec:
+      terminationGracePeriodSeconds: 1
+      automountServiceAccountToken: false
+      containers:
+      - name: cluster
+        image: ghcr.io/wzshiming/kwok/cluster:v0.7.0-alpha.2-k8s.v1.31.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: 8080
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1000Mi
+          requests:
+            cpu: 200m
+            memory: 400Mi
+        volumeMounts:
+        - mountPath: /root/.kwok/kwok.yaml
+          name: subcluster-config
+          readOnly: true
+          subPath: kwok.yaml
+        - mountPath: /root/.kube/config
+          name: subcluster-config
+          subPath: kubeconfig
+        - mountPath: /root/.kwok/clusters/
+          name: subcluster
+      - name: sublet
+        image: sublet
+        imagePullPolicy: IfNotPresent
+        args:
+        - --kubeconfig=/root/.kube/config
+        - --node-name=$(POD_NAME)
+        - --source-kubeconfig=/root/.kube/source-config
+        - --source-node-name=$(NODE_NAME)
+        - --source-namespace=$(POD_NAMESPACE)
+        - --dns-servers=$(POD_IP)
+        - --dns-searches=svc.subcluster.local
+        - --dns-searches=subcluster.local
+        volumeMounts:
+        - mountPath: /root/.kube/config
+          name: subcluster-config
+          subPath: kubeconfig
+        - mountPath: /root/.kube/source-config
+          name: source-kubeconfig
+          subPath: kubeconfig
+        env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          limits:
+            cpu: 200m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+      - args:
+        - -conf
+        - /etc/coredns/Corefile
+        image: registry.k8s.io/coredns/coredns:v1.11.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8180
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: coredns
+        ports:
+        - containerPort: 53
+          name: dns
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+        - containerPort: 9153
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /ready
+            port: 8181
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 200m
+            memory: 170Mi
+          requests:
+            cpu: 100m
+            memory: 70Mi
+        volumeMounts:
+        - mountPath: /etc/coredns/Corefile
+          name: subcluster-config
+          readOnly: true
+          subPath: Corefile
+      volumes:
+      - name: subcluster
+        persistentVolumeClaim:
+          claimName: subcluster
+      - name: subcluster-config
+        configMap:
+          name: subcluster
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: kubeconfig
+            path: kubeconfig
+          name: subcluster-source-kubeconfig
+        name: source-kubeconfig

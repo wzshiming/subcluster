@@ -6,20 +6,25 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
+	"github.com/wzshiming/subcluster/pkg/clientset"
 	"github.com/wzshiming/subcluster/pkg/sublet"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
 	nodeName       string
 	kubeConfigPath string
+	dnsServers     []string
+	dnsSearches    []string
 
 	sourceNodeName       string
 	sourceKubeConfigPath string
+	sourceNamespace      string
 )
 
 func init() {
@@ -29,6 +34,9 @@ func init() {
 	pflag.StringVar(&kubeConfigPath, "kubeconfig", "", "kubeconfig path")
 	pflag.StringVar(&sourceNodeName, "source-node-name", "", "source node name")
 	pflag.StringVar(&sourceKubeConfigPath, "source-kubeconfig", "", "source kubeconfig path")
+	pflag.StringVar(&sourceNamespace, "source-namespace", "", "source namespace")
+	pflag.StringSliceVar(&dnsServers, "dns-servers", dnsServers, "dns servers")
+	pflag.StringSliceVar(&dnsSearches, "dns-searches", dnsSearches, "dns searches")
 	pflag.Parse()
 }
 
@@ -41,24 +49,41 @@ func main() {
 		cancel()
 	}()
 
-	sourceClient, err := clientsetFromKubeConfigPath(sourceKubeConfigPath)
+	sourceClient, err := clientset.ClientsetFromKubeConfigPath(sourceKubeConfigPath)
 	if err != nil {
 		slog.Error("create source clientset", "err", err)
 		os.Exit(1)
 	}
 
-	client, err := clientsetFromKubeConfigPath(kubeConfigPath)
+	err = waitForReady(ctx, sourceClient)
+	if err != nil {
+		slog.Error("wait for ready source", "err", err)
+		os.Exit(1)
+	}
+
+	client, err := clientset.ClientsetFromKubeConfigPath(kubeConfigPath)
 	if err != nil {
 		slog.Error("create clientset", "err", err)
 		os.Exit(1)
 	}
 
-	cm, err := sublet.NewSublet(
-		nodeName,
-		client,
-		sourceNodeName,
-		sourceClient,
-	)
+	err = waitForReady(ctx, client)
+	if err != nil {
+		slog.Error("wait for ready source", "err", err)
+		os.Exit(1)
+	}
+
+	conf := sublet.Config{
+		NodeName:        nodeName,
+		Client:          client,
+		SourceNodeName:  sourceNodeName,
+		SourceClient:    sourceClient,
+		SourceNamespace: sourceNamespace,
+		DnsServers:      dnsServers,
+		DnsSearches:     dnsSearches,
+	}
+
+	cm, err := sublet.NewSublet(conf)
 	if err != nil {
 		slog.Error("create sublet", "err", err)
 		os.Exit(1)
@@ -72,24 +97,21 @@ func main() {
 	<-ctx.Done()
 }
 
-func restConfigFromKubeConfigPath(kubeConfigPath string) (*rest.Config, error) {
-	_, err := os.Stat(kubeConfigPath)
-	if os.IsNotExist(err) {
-		return rest.InClusterConfig()
-	}
+func waitForReady(ctx context.Context, clientset kubernetes.Interface) error {
+	err := wait.PollUntilContextTimeout(ctx, time.Second, 30*time.Second, false,
+		func(ctx context.Context) (bool, error) {
+			_, err := clientset.CoreV1().Nodes().List(ctx,
+				metav1.ListOptions{
+					Limit: 1,
+				})
+			if err != nil {
+				return false, nil
+			}
+			return true, nil
+		},
+	)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeConfigPath},
-		&clientcmd.ConfigOverrides{},
-	).ClientConfig()
-}
-
-func clientsetFromKubeConfigPath(kubeConfigPath string) (*kubernetes.Clientset, error) {
-	config, err := restConfigFromKubeConfigPath(kubeConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	return kubernetes.NewForConfig(config)
+	return nil
 }
