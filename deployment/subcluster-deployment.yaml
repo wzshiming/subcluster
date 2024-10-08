@@ -73,6 +73,7 @@ spec:
         imagePullPolicy: IfNotPresent
         args:
         - --kubeconfig=/root/.kube/config
+        - --name=sublet
         - --node-name=subnode
         - --source-kubeconfig=/root/.kube/source-config
         - --source-node-name=$(NODE_NAME)

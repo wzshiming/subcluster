@@ -13,6 +13,7 @@ const (
 	subletPrefix       = "sublet"
 	subletNamespaceKey = subletPrefix + "-namespace"
 	subletNodeKey      = subletPrefix + "-node"
+	subletClusterKey   = subletPrefix + "-cluster"
 )
 
 var deleteOpt = metav1.NewDeleteOptions(0)
@@ -23,6 +24,7 @@ type Sublet struct {
 }
 
 type Config struct {
+	SubclusterName  string
 	NodeName        string
 	Client          kubernetes.Interface
 	SourceNodeName  string
@@ -44,6 +46,7 @@ func NewSublet(conf Config) (*Sublet, error) {
 	}
 
 	pod, err := NewPodController(PodControllerConfig{
+		SubclusterName:  conf.SubclusterName,
 		NodeName:        conf.NodeName,
 		Client:          conf.Client,
 		SourceNodeName:  conf.SourceNodeName,
@@ -63,16 +66,19 @@ func NewSublet(conf Config) (*Sublet, error) {
 	return &s, nil
 }
 
-func nameToSrc(name, namespace string) string {
-	return strings.Join([]string{subletPrefix, namespace, name}, ".")
+func nameToSource(subclusterName, namespace, name string) string {
+	return strings.Join([]string{subletPrefix, subclusterName, namespace, name}, ".")
 }
 
-func nameToDst(name string) (string, string, error) {
-	slice := strings.SplitN(name, ".", 3)
-	if slice[0] != subletPrefix || len(slice) != 3 {
-		return "", "", fmt.Errorf("invalid sublet name: %s", name)
+func nameFromSource(sourceName string) (subclusterName, namespace, name string, err error) {
+	slice := strings.SplitN(sourceName, ".", 4)
+	if slice[0] != subletPrefix || len(slice) != 4 {
+		return "", "", "", fmt.Errorf("invalid sublet name: %s", sourceName)
 	}
-	return slice[2], slice[1], nil
+	subclusterName = slice[1]
+	namespace = slice[2]
+	name = slice[3]
+	return subclusterName, namespace, name, nil
 }
 
 func (s *Sublet) Start(ctx context.Context) error {

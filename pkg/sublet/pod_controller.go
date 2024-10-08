@@ -18,6 +18,7 @@ import (
 type PodController struct {
 	clock clock.Clock
 
+	subclusterName    string
 	nodeName          string
 	client            kubernetes.Interface
 	cachePodsInformer *informer.Informer[*corev1.Pod, *corev1.PodList]
@@ -33,6 +34,7 @@ type PodController struct {
 }
 
 type PodControllerConfig struct {
+	SubclusterName  string
 	NodeName        string
 	Client          kubernetes.Interface
 	SourceNodeName  string
@@ -45,6 +47,7 @@ type PodControllerConfig struct {
 func NewPodController(conf PodControllerConfig) (*PodController, error) {
 	s := PodController{
 		clock:           clock.RealClock{},
+		subclusterName:  conf.SubclusterName,
 		nodeName:        conf.NodeName,
 		client:          conf.Client,
 		sourceNodeName:  conf.SourceNodeName,
@@ -73,7 +76,8 @@ func (s *PodController) Start(ctx context.Context) error {
 	srcPodsEvent := make(chan informer.Event[*corev1.Pod])
 	srcPodsGetter, err := srcCachePodsInformer.WatchWithCache(ctx, informer.Option{
 		LabelSelector: labels.SelectorFromSet(map[string]string{
-			subletNodeKey: s.nodeName,
+			subletNodeKey:    s.nodeName,
+			subletClusterKey: s.subclusterName,
 		}).String(),
 		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", s.sourceNodeName).String(),
 	}, srcPodsEvent)
@@ -127,7 +131,7 @@ func (s *PodController) Start(ctx context.Context) error {
 }
 
 func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) error {
-	name := nameToSrc(pod.Name, pod.Namespace)
+	name := nameToSource(s.subclusterName, pod.Namespace, pod.Name)
 	if pod.DeletionTimestamp != nil {
 		err := s.sourceClient.CoreV1().Pods(s.sourceNamespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil {
@@ -147,6 +151,7 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 		srcPod = pod.DeepCopy()
 		srcPod.Labels[subletNamespaceKey] = pod.Namespace
 		srcPod.Labels[subletNodeKey] = s.nodeName
+		srcPod.Labels[subletClusterKey] = s.subclusterName
 		srcPod.Name = name
 		srcPod.Namespace = s.sourceNamespace
 		srcPod.Spec.NodeName = s.sourceNodeName
@@ -183,6 +188,7 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 	srcPod.Annotations = pod.Annotations
 	srcPod.Labels[subletNamespaceKey] = pod.Namespace
 	srcPod.Labels[subletNodeKey] = s.nodeName
+	srcPod.Labels[subletClusterKey] = s.subclusterName
 	srcPod.Spec.NodeName = s.sourceNodeName
 	srcPod.Spec.DNSPolicy = corev1.DNSNone
 	srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{
@@ -209,9 +215,12 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 }
 
 func (s *PodController) SyncPodStatusFromSource(ctx context.Context, srcPod *corev1.Pod) error {
-	name, namespace, err := nameToDst(srcPod.Name)
+	subclusterName, namespace, name, err := nameFromSource(srcPod.Name)
 	if err != nil {
 		return err
+	}
+	if subclusterName != s.subclusterName {
+		return nil
 	}
 	if srcPod.DeletionTimestamp != nil {
 		err := s.client.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
@@ -265,11 +274,13 @@ func (s *PodController) SyncPodStatusFromSource(ctx context.Context, srcPod *cor
 }
 
 func (s *PodController) DeletePodFromSource(ctx context.Context, srcPod *corev1.Pod) error {
-	name, namespace, err := nameToDst(srcPod.Name)
+	subclusterName, namespace, name, err := nameFromSource(srcPod.Name)
 	if err != nil {
 		return err
 	}
-
+	if subclusterName != s.subclusterName {
+		return nil
+	}
 	err = s.client.CoreV1().Pods(namespace).Delete(ctx, name, *deleteOpt)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
@@ -280,7 +291,7 @@ func (s *PodController) DeletePodFromSource(ctx context.Context, srcPod *corev1.
 
 // DeletePodToSource deletes the specified pod out of memory.
 func (s *PodController) DeletePodToSource(ctx context.Context, pod *corev1.Pod) (err error) {
-	name := nameToSrc(pod.Name, pod.Namespace)
+	name := nameToSource(s.subclusterName, pod.Namespace, pod.Name)
 
 	err = s.sourceClient.CoreV1().Pods(s.sourceNamespace).Delete(ctx, name, *deleteOpt)
 	if err != nil && !apierrors.IsNotFound(err) {

@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	name           string
 	nodeName       string
 	kubeConfigPath string
 	dnsServers     []string
@@ -30,6 +31,7 @@ var (
 func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
 
+	pflag.StringVar(&name, "name", "sublet", "name of the subcluster")
 	pflag.StringVar(&nodeName, "node-name", "", "node name")
 	pflag.StringVar(&kubeConfigPath, "kubeconfig", "", "kubeconfig path")
 	pflag.StringVar(&sourceNodeName, "source-node-name", "", "source node name")
@@ -74,6 +76,7 @@ func main() {
 	}
 
 	conf := sublet.Config{
+		SubclusterName:  name,
 		NodeName:        nodeName,
 		Client:          client,
 		SourceNodeName:  sourceNodeName,
