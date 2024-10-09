@@ -1,14 +1,16 @@
 
+KIND=go run sigs.k8s.io/kind@v0.24.0
+HYDROPHONE=go run sigs.k8s.io/hydrophone@v0.6.0
 
 build:
 	docker build -t sublet -f ./images/sublet/Dockerfile .
 
 up:
-	kind create cluster --config ./kind.yaml
+	$(KIND) create cluster --config ./kind.yaml
 
-	kind load docker-image sublet
+	$(KIND) load docker-image sublet
 
-	kind get kubeconfig --internal | sed 's/kind-control-plane:6443/kubernetes.default.svc:443/g' > kubeconfig
+	$(KIND) get kubeconfig --internal | sed 's/kind-control-plane:6443/kubernetes.default.svc:443/g' > kubeconfig
 
 	kubectl create configmap subcluster-source-kubeconfig --from-file=./kubeconfig
 
@@ -18,7 +20,7 @@ up:
 	kubectl rollout status deploy/subcluster --timeout=90s
 
 down:
-	kind delete cluster
+	$(KIND) delete cluster
 
 e2e:
 	kubectl --kubeconfig ./kubeconfig.yaml create deployment nginx --image=docker.io/library/nginx:alpine --replicas=1
@@ -26,3 +28,6 @@ e2e:
 	kubectl --kubeconfig ./kubeconfig.yaml get pod,node
 	kubectl --kubeconfig ./kubeconfig.yaml expose deployment nginx --port=80
 	kubectl --kubeconfig ./kubeconfig.yaml get svc
+
+conformance:
+	$(HYDROPHONE) --conformance --kubeconfig ./kubeconfig.yaml
