@@ -130,6 +130,31 @@ func (s *PodController) Start(ctx context.Context) error {
 	return nil
 }
 
+func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) error {
+	if srcPod.Labels == nil {
+		srcPod.Labels = map[string]string{}
+	}
+	srcPod.Labels[subletNamespaceKey] = pod.Namespace
+	srcPod.Labels[subletNodeKey] = s.nodeName
+	srcPod.Labels[subletClusterKey] = s.subclusterName
+	srcPod.Name = name
+	srcPod.Namespace = s.sourceNamespace
+	srcPod.Spec.NodeName = s.sourceNodeName
+	srcPod.Spec.DNSPolicy = corev1.DNSNone
+	srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{
+		Nameservers: s.dnsServers,
+		Searches:    s.dnsSearches,
+	}
+	f := false
+	srcPod.Spec.AutomountServiceAccountToken = &f
+	srcPod.Spec.ServiceAccountName = "default"
+	srcPod.Spec.DeprecatedServiceAccount = "default"
+	srcPod.ResourceVersion = ""
+	srcPod.UID = ""
+	srcPod.OwnerReferences = nil
+	return nil
+}
+
 func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) error {
 	name := nameToSource(s.subclusterName, pod.Namespace, pod.Name)
 	if pod.DeletionTimestamp != nil {
@@ -149,22 +174,12 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 	srcPod, ok := s.srcPodsGetter.GetWithNamespace(name, s.sourceNamespace)
 	if !ok {
 		srcPod = pod.DeepCopy()
-		srcPod.Labels[subletNamespaceKey] = pod.Namespace
-		srcPod.Labels[subletNodeKey] = s.nodeName
-		srcPod.Labels[subletClusterKey] = s.subclusterName
-		srcPod.Name = name
-		srcPod.Namespace = s.sourceNamespace
-		srcPod.Spec.NodeName = s.sourceNodeName
-		srcPod.Spec.DNSPolicy = corev1.DNSNone
-		srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{
-			Nameservers: s.dnsServers,
-			Searches:    s.dnsSearches,
+		err := s.syncPodToSource(pod, srcPod, name)
+		if err != nil {
+			return err
 		}
-		srcPod.ResourceVersion = ""
-		srcPod.UID = ""
-		srcPod.OwnerReferences = nil
 
-		_, err := s.sourceClient.CoreV1().Pods(s.sourceNamespace).Create(ctx, srcPod, metav1.CreateOptions{})
+		_, err = s.sourceClient.CoreV1().Pods(s.sourceNamespace).Create(ctx, srcPod, metav1.CreateOptions{})
 		if err == nil {
 			return nil
 		}
@@ -184,19 +199,11 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 	pod = pod.DeepCopy()
 	srcPod = srcPod.DeepCopy()
 	srcPod.Spec = pod.Spec
-	srcPod.Labels = pod.Labels
-	srcPod.Annotations = pod.Annotations
-	srcPod.Labels[subletNamespaceKey] = pod.Namespace
-	srcPod.Labels[subletNodeKey] = s.nodeName
-	srcPod.Labels[subletClusterKey] = s.subclusterName
-	srcPod.Spec.NodeName = s.sourceNodeName
-	srcPod.Spec.DNSPolicy = corev1.DNSNone
-	srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{
-		Nameservers: s.dnsServers,
-		Searches:    s.dnsSearches,
+	err := s.syncPodToSource(pod, srcPod, name)
+	if err != nil {
+		return err
 	}
-	srcPod.OwnerReferences = nil
-	_, err := s.sourceClient.CoreV1().Pods(s.sourceNamespace).Update(ctx, srcPod, metav1.UpdateOptions{})
+	_, err = s.sourceClient.CoreV1().Pods(s.sourceNamespace).Update(ctx, srcPod, metav1.UpdateOptions{})
 	if err != nil {
 		if apierrors.IsConflict(err) {
 			srcPod, err = s.sourceClient.CoreV1().Pods(s.sourceNamespace).Get(ctx, name, metav1.GetOptions{})
