@@ -24,6 +24,8 @@ spec:
         - --kubeconfig=/root/.kube/config
         - --name=sublet
         - --node-name=subnode
+        - --node-ip=$(POD_IP)
+        - --node-port=7878
         - --source-kubeconfig=/root/.kube/source-config
         - --source-node-name=$(NODE_NAME)
         - --source-namespace=$(POD_NAMESPACE)
@@ -62,17 +64,18 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        resources:
-          limits:
-            cpu: 200m
-            memory: 200Mi
-          requests:
-            cpu: 100m
-            memory: 100Mi
+#        resources:
+#          limits:
+#            cpu: 200m
+#            memory: 200Mi
+#          requests:
+#            cpu: 100m
+#            memory: 100Mi
       - name: cluster
         image: ghcr.io/wzshiming/kwok/cluster:v0.7.0-alpha.2-k8s.v1.31.0
         imagePullPolicy: IfNotPresent
         args:
+        - --kube-apiserver-port=443
         - --extra-args=kube-apiserver=advertise-address=$(POD_IP)
         - --extra-args=kube-apiserver=service-cluster-ip-range=$(POD_IP)/12
         env:
@@ -103,13 +106,13 @@ spec:
         - containerPort: 8080
           name: http
           protocol: TCP
-        resources:
-          limits:
-            cpu: 1000m
-            memory: 1000Mi
-          requests:
-            cpu: 200m
-            memory: 400Mi
+#        resources:
+#          limits:
+#            cpu: 1000m
+#            memory: 1000Mi
+#          requests:
+#            cpu: 200m
+#            memory: 400Mi
         volumeMounts:
         - mountPath: /root/.kwok/kwok.yaml
           name: subcluster-config
@@ -155,13 +158,13 @@ spec:
           periodSeconds: 10
           successThreshold: 1
           timeoutSeconds: 1
-        resources:
-          limits:
-            cpu: 200m
-            memory: 170Mi
-          requests:
-            cpu: 100m
-            memory: 70Mi
+#        resources:
+#          limits:
+#            cpu: 200m
+#            memory: 170Mi
+#          requests:
+#            cpu: 100m
+#            memory: 70Mi
         volumeMounts:
         - mountPath: /etc/coredns/Corefile
           name: subcluster-config

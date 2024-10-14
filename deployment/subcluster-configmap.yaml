@@ -9,7 +9,13 @@ data:
     options:
       disable:
       - kwok-controller
+      kubeApiserverCertSANs: # TODO: remove this
+      - kubernetes
     componentsPatches:
+    - name: kube-apiserver-insecure-proxy
+      extraArgs:
+      - key: disable-filter 
+        value: 'true'
     - name: kube-controller-manager
       extraArgs:
       - key: controllers

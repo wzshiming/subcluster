@@ -23,10 +23,14 @@ func RestConfigFromKubeConfigPath(kubeConfigPath string) (*rest.Config, error) {
 	).ClientConfig()
 }
 
-func ClientsetFromKubeConfigPath(kubeConfigPath string) (*kubernetes.Clientset, error) {
+func ClientsetFromKubeConfigPath(kubeConfigPath string) (*kubernetes.Clientset, *rest.Config, error) {
 	config, err := RestConfigFromKubeConfigPath(kubeConfigPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return kubernetes.NewForConfig(config)
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	return clientset, config, nil
 }

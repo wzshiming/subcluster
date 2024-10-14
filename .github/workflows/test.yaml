@@ -30,3 +30,11 @@ jobs:
         shell: bash
         run: |
           make conformance
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results
+          path: |
+            e2e.log
+            junit_01.xml

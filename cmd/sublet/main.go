@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -26,6 +27,9 @@ var (
 	sourceNodeName       string
 	sourceKubeConfigPath string
 	sourceNamespace      string
+
+	nodeIP   string
+	nodePort int
 )
 
 func init() {
@@ -39,6 +43,9 @@ func init() {
 	pflag.StringVar(&sourceNamespace, "source-namespace", "", "source namespace")
 	pflag.StringSliceVar(&dnsServers, "dns-servers", dnsServers, "dns servers")
 	pflag.StringSliceVar(&dnsSearches, "dns-searches", dnsSearches, "dns searches")
+
+	pflag.StringVar(&nodeIP, "node-ip", "", "node ip")
+	pflag.IntVar(&nodePort, "node-port", 0, "node port")
 	pflag.Parse()
 }
 
@@ -51,7 +58,7 @@ func main() {
 		cancel()
 	}()
 
-	sourceClient, err := clientset.ClientsetFromKubeConfigPath(sourceKubeConfigPath)
+	sourceClient, sourceRestConfig, err := clientset.ClientsetFromKubeConfigPath(sourceKubeConfigPath)
 	if err != nil {
 		slog.Error("create source clientset", "err", err)
 		os.Exit(1)
@@ -63,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	client, err := clientset.ClientsetFromKubeConfigPath(kubeConfigPath)
+	client, _, err := clientset.ClientsetFromKubeConfigPath(kubeConfigPath)
 	if err != nil {
 		slog.Error("create clientset", "err", err)
 		os.Exit(1)
@@ -84,6 +91,8 @@ func main() {
 		SourceNamespace: sourceNamespace,
 		DnsServers:      dnsServers,
 		DnsSearches:     dnsSearches,
+		NodeIP:          nodeIP,
+		NodePort:        nodePort,
 	}
 
 	cm, err := sublet.NewSublet(conf)
@@ -97,7 +106,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	<-ctx.Done()
+	server := sublet.NewServer(sublet.ServerConfig{
+		SubclusterName:   name,
+		SourceClient:     sourceClient,
+		SourceRestConfig: sourceRestConfig,
+		SourceNamespace:  sourceNamespace,
+	})
+
+	server.InstallDebuggingHandlers()
+
+	err = server.Run(ctx, ":"+strconv.Itoa(nodePort), "", "")
+	if err != nil {
+		slog.Error("start server", "err", err)
+		os.Exit(1)
+	}
 }
 
 func waitForReady(ctx context.Context, clientset kubernetes.Interface) error {

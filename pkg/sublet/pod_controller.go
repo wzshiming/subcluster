@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/wzshiming/subcluster/pkg/informer"
+	"github.com/wzshiming/subcluster/pkg/utils/format"
+	"github.com/wzshiming/subcluster/pkg/utils/slices"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +30,9 @@ type PodController struct {
 	dnsServers        []string
 	dnsSearches       []string
 
+	nodePort int
+	nodeIP   string
+
 	sourceNodeName       string
 	sourceClient         kubernetes.Interface
 	srcCachePodsInformer *informer.Informer[*corev1.Pod, *corev1.PodList]
@@ -35,6 +42,8 @@ type PodController struct {
 
 type PodControllerConfig struct {
 	SubclusterName  string
+	NodePort        int
+	NodeIP          string
 	NodeName        string
 	Client          kubernetes.Interface
 	SourceNodeName  string
@@ -49,6 +58,8 @@ func NewPodController(conf PodControllerConfig) (*PodController, error) {
 		clock:           clock.RealClock{},
 		subclusterName:  conf.SubclusterName,
 		nodeName:        conf.NodeName,
+		nodeIP:          conf.NodeIP,
+		nodePort:        conf.NodePort,
 		client:          conf.Client,
 		sourceNodeName:  conf.SourceNodeName,
 		sourceClient:    conf.SourceClient,
@@ -134,19 +145,106 @@ func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) er
 	if srcPod.Labels == nil {
 		srcPod.Labels = map[string]string{}
 	}
+	if srcPod.Annotations == nil {
+		srcPod.Annotations = map[string]string{}
+	}
 	srcPod.Labels[subletNamespaceKey] = pod.Namespace
 	srcPod.Labels[subletNodeKey] = s.nodeName
 	srcPod.Labels[subletClusterKey] = s.subclusterName
 	srcPod.Name = name
 	srcPod.Namespace = s.sourceNamespace
 	srcPod.Spec.NodeName = s.sourceNodeName
-	srcPod.Spec.DNSPolicy = corev1.DNSNone
-	srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{
-		Nameservers: s.dnsServers,
-		Searches:    s.dnsSearches,
+
+	if len(s.dnsServers) != 0 {
+		srcPod.Spec.DNSPolicy = corev1.DNSNone
+		srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{}
+		srcPod.Spec.DNSConfig.Nameservers = s.dnsServers
+		if len(s.dnsSearches) != 0 {
+			srcPod.Spec.DNSConfig.Searches = s.dnsSearches
+		}
 	}
-	f := false
-	srcPod.Spec.AutomountServiceAccountToken = &f
+
+	apiserverAddress := "kubernetes"
+
+	srcPod.Spec.HostAliases = append(srcPod.Spec.HostAliases, corev1.HostAlias{
+		IP: s.nodeIP,
+		Hostnames: []string{
+			apiserverAddress,
+			s.nodeName,
+		},
+	})
+
+	if srcPod.Spec.AutomountServiceAccountToken == nil || *srcPod.Spec.AutomountServiceAccountToken == false {
+		cm, err := s.client.CoreV1().ConfigMaps(pod.Namespace).Get(context.Background(), "kube-root-ca.crt", metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		srcPod.Annotations["sublet-ca-crt"] = cm.Data["ca.crt"]
+
+		tq, err := s.client.CoreV1().ServiceAccounts(pod.Namespace).CreateToken(context.Background(), pod.Spec.ServiceAccountName,
+			&authenticationv1.TokenRequest{}, metav1.CreateOptions{})
+		if err != nil {
+			return err
+		}
+		srcPod.Annotations["sublet-token"] = tq.Status.Token
+
+		srcPod.Spec.Volumes = slices.Map(srcPod.Spec.Volumes, func(volume corev1.Volume) corev1.Volume {
+			if !strings.HasPrefix(volume.Name, "kube-api-") || volume.Projected == nil {
+				return volume
+			}
+
+			volume.Projected = nil
+			volume.DownwardAPI = &corev1.DownwardAPIVolumeSource{
+				Items: []corev1.DownwardAPIVolumeFile{
+					{
+						Path: "ca.crt",
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "metadata.annotations['sublet-ca-crt']",
+						},
+					},
+					{
+						Path: "token",
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "metadata.annotations['sublet-token']",
+						},
+					},
+					{
+						Path: "namespace",
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "metadata.labels['" + subletNamespaceKey + "']",
+						},
+					},
+				},
+			}
+			return volume
+		})
+	} else {
+		srcPod.Spec.Volumes = slices.Filter(srcPod.Spec.Volumes, func(volume corev1.Volume) bool {
+			return !strings.HasPrefix(volume.Name, "kube-api-")
+		})
+		srcPod.Spec.Containers = slices.Map(srcPod.Spec.Containers, func(container corev1.Container) corev1.Container {
+			container.VolumeMounts = slices.Filter(container.VolumeMounts, func(mount corev1.VolumeMount) bool {
+				return !strings.HasPrefix(mount.Name, "kube-api-")
+			})
+			return container
+		})
+	}
+
+	srcPod.Spec.Containers = slices.Map(srcPod.Spec.Containers, func(container corev1.Container) corev1.Container {
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "KUBERNETES_SERVICE_HOST",
+				Value: apiserverAddress,
+			},
+			corev1.EnvVar{
+				Name:  "KUBERNETES_SERVICE_PORT",
+				Value: "443",
+			},
+		)
+		return container
+	})
+
+	srcPod.Spec.AutomountServiceAccountToken = format.Ptr(false)
 	srcPod.Spec.ServiceAccountName = "default"
 	srcPod.Spec.DeprecatedServiceAccount = "default"
 	srcPod.ResourceVersion = ""

@@ -26,6 +26,9 @@ type NodeController struct {
 	nodeName string
 	client   kubernetes.Interface
 
+	nodePort int
+	nodeIP   string
+
 	sourceNodeName       string
 	sourceClient         kubernetes.Interface
 	srcCacheNodeInformer *informer.Informer[*corev1.Node, *corev1.NodeList]
@@ -33,6 +36,8 @@ type NodeController struct {
 }
 
 type NodeControllerConfig struct {
+	NodePort       int
+	NodeIP         string
 	NodeName       string
 	Client         kubernetes.Interface
 	SourceNodeName string
@@ -46,6 +51,8 @@ func NewNodeController(conf NodeControllerConfig) (*NodeController, error) {
 		client:         conf.Client,
 		sourceNodeName: conf.SourceNodeName,
 		sourceClient:   conf.SourceClient,
+		nodePort:       conf.NodePort,
+		nodeIP:         conf.NodeIP,
 	}
 	return &s, nil
 }
@@ -93,6 +100,18 @@ func (s *NodeController) Start(ctx context.Context) error {
 }
 
 func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.Node) error {
+	node = node.DeepCopy()
+
+	if s.nodeIP != "" {
+		node.Status.Addresses = []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: s.nodeIP},
+		}
+	}
+
+	if s.nodePort != 0 {
+		node.Status.DaemonEndpoints.KubeletEndpoint.Port = int32(s.nodePort)
+	}
+
 	nodeClient := s.client.CoreV1().Nodes()
 	dstNode, err := nodeClient.Get(ctx, s.nodeName, metav1.GetOptions{})
 	if err != nil {
