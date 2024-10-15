@@ -17,70 +17,18 @@ spec:
       terminationGracePeriodSeconds: 1
       automountServiceAccountToken: false
       containers:
-      - name: cluster
-        image: ghcr.io/wzshiming/kwok/cluster:v0.7.0-alpha.2-k8s.v1.31.0
-        imagePullPolicy: IfNotPresent
-        args:
-        - --extra-args=kube-apiserver=advertise-address=$(POD_IP)
-        - --extra-args=kube-apiserver=service-cluster-ip-range=$(POD_IP)/12
-        env:
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
-        livenessProbe:
-          failureThreshold: 5
-          httpGet:
-            path: /healthz
-            port: 8080
-            scheme: HTTP
-          initialDelaySeconds: 60
-          periodSeconds: 10
-          successThreshold: 1
-          timeoutSeconds: 5
-        readinessProbe:
-          failureThreshold: 3
-          httpGet:
-            path: /readyz
-            port: 8080
-            scheme: HTTP
-          periodSeconds: 10
-          successThreshold: 1
-          timeoutSeconds: 1
-        ports:
-        - containerPort: 8080
-          name: http
-          protocol: TCP
-        resources:
-          limits:
-            cpu: 1000m
-            memory: 1000Mi
-          requests:
-            cpu: 200m
-            memory: 400Mi
-        volumeMounts:
-        - mountPath: /root/.kwok/kwok.yaml
-          name: subcluster-config
-          readOnly: true
-          subPath: kwok.yaml
-        - mountPath: /root/.kube/config
-          name: subcluster-config
-          subPath: kubeconfig
-        - mountPath: /root/.kwok/clusters/
-          name: subcluster
       - name: sublet
         image: sublet
         imagePullPolicy: IfNotPresent
         args:
         - --kubeconfig=/root/.kube/config
         - --name=sublet
-        - --node-name=subnode
+        - --node-ip=$(POD_IP)
+        - --node-port=7878
         - --source-kubeconfig=/root/.kube/source-config
-        - --source-node-name=$(NODE_NAME)
+        - --node-mapping=subnode-0=$(NODE_NAME),subnode-1=$(NODE_NAME),subnode-2=$(NODE_NAME)
         - --source-namespace=$(POD_NAMESPACE)
         - --dns-servers=$(POD_IP)
-        - --dns-searches=svc.cluster.local
-        - --dns-searches=cluster.local
         volumeMounts:
         - mountPath: /root/.kube/config
           name: subcluster-config
@@ -113,14 +61,67 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        resources:
-          limits:
-            cpu: 200m
-            memory: 200Mi
-          requests:
-            cpu: 100m
-            memory: 100Mi
-      - args:
+#        resources:
+#          limits:
+#            cpu: 200m
+#            memory: 200Mi
+#          requests:
+#            cpu: 100m
+#            memory: 100Mi
+      - name: cluster
+        image: ghcr.io/wzshiming/kwok/cluster:v0.7.0-alpha.2-k8s.v1.31.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --kube-apiserver-port=443
+        - --extra-args=kube-apiserver=advertise-address=$(POD_IP)
+        - --extra-args=kube-apiserver=service-cluster-ip-range=10.96.0.0/12
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: 8080
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+#        resources:
+#          limits:
+#            cpu: 1000m
+#            memory: 1000Mi
+#          requests:
+#            cpu: 200m
+#            memory: 400Mi
+        volumeMounts:
+        - mountPath: /root/.kwok/kwok.yaml
+          name: subcluster-config
+          readOnly: true
+          subPath: kwok.yaml
+        - mountPath: /root/.kube/config
+          name: subcluster-config
+          subPath: kubeconfig
+        - mountPath: /root/.kwok/clusters/
+          name: subcluster
+      - name: coredns
+        args:
         - -conf
         - /etc/coredns/Corefile
         image: registry.k8s.io/coredns/coredns:v1.11.1
@@ -135,7 +136,6 @@ spec:
           periodSeconds: 10
           successThreshold: 1
           timeoutSeconds: 5
-        name: coredns
         ports:
         - containerPort: 53
           name: dns
@@ -155,13 +155,13 @@ spec:
           periodSeconds: 10
           successThreshold: 1
           timeoutSeconds: 1
-        resources:
-          limits:
-            cpu: 200m
-            memory: 170Mi
-          requests:
-            cpu: 100m
-            memory: 70Mi
+#        resources:
+#          limits:
+#            cpu: 200m
+#            memory: 170Mi
+#          requests:
+#            cpu: 100m
+#            memory: 70Mi
         volumeMounts:
         - mountPath: /etc/coredns/Corefile
           name: subcluster-config

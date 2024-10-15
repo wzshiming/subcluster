@@ -3,6 +3,8 @@ name: Test
 on:
   pull_request:
   push:
+    branches:
+    - master
 
 jobs:
   test:
@@ -23,3 +25,17 @@ jobs:
         shell: bash
         run: |
           make e2e
+
+      - name: Conformance
+        shell: bash
+        run: |
+          make conformance
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results
+          path: |
+            e2e.log
+            junit_01.xml
