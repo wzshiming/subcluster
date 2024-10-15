@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	name           string
-	nodeName       string
+	name string
+
+	nodeMapping map[string]string
+
 	kubeConfigPath string
 	dnsServers     []string
 	dnsSearches    []string
 
-	sourceNodeName       string
 	sourceKubeConfigPath string
 	sourceNamespace      string
 
@@ -36,13 +37,13 @@ func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
 
 	pflag.StringVar(&name, "name", "sublet", "name of the subcluster")
-	pflag.StringVar(&nodeName, "node-name", "", "node name")
 	pflag.StringVar(&kubeConfigPath, "kubeconfig", "", "kubeconfig path")
-	pflag.StringVar(&sourceNodeName, "source-node-name", "", "source node name")
 	pflag.StringVar(&sourceKubeConfigPath, "source-kubeconfig", "", "source kubeconfig path")
 	pflag.StringVar(&sourceNamespace, "source-namespace", "", "source namespace")
 	pflag.StringSliceVar(&dnsServers, "dns-servers", dnsServers, "dns servers")
 	pflag.StringSliceVar(&dnsSearches, "dns-searches", dnsSearches, "dns searches")
+
+	pflag.StringToStringVar(&nodeMapping, "node-mapping", map[string]string{}, "node mapping")
 
 	pflag.StringVar(&nodeIP, "node-ip", "", "node ip")
 	pflag.IntVar(&nodePort, "node-port", 0, "node port")
@@ -84,9 +85,8 @@ func main() {
 
 	conf := sublet.Config{
 		SubclusterName:  name,
-		NodeName:        nodeName,
 		Client:          client,
-		SourceNodeName:  sourceNodeName,
+		NodeMapping:     nodeMapping,
 		SourceClient:    sourceClient,
 		SourceNamespace: sourceNamespace,
 		DnsServers:      dnsServers,

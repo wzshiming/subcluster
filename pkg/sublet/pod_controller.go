@@ -22,31 +22,28 @@ import (
 type PodController struct {
 	clock clock.Clock
 
-	subclusterName    string
-	nodeName          string
-	client            kubernetes.Interface
-	cachePodsInformer *informer.Informer[*corev1.Pod, *corev1.PodList]
-	podsGetter        informer.Getter[*corev1.Pod]
-	dnsServers        []string
-	dnsSearches       []string
+	subclusterName string
+
+	client      kubernetes.Interface
+	dnsServers  []string
+	dnsSearches []string
+
+	nodeMapping map[string]string
 
 	nodePort int
 	nodeIP   string
 
-	sourceNodeName       string
-	sourceClient         kubernetes.Interface
-	srcCachePodsInformer *informer.Informer[*corev1.Pod, *corev1.PodList]
-	srcPodsGetter        informer.Getter[*corev1.Pod]
-	sourceNamespace      string
+	sourceClient kubernetes.Interface
+
+	sourceNamespace string
 }
 
 type PodControllerConfig struct {
 	SubclusterName  string
 	NodePort        int
 	NodeIP          string
-	NodeName        string
+	NodeMapping     map[string]string
 	Client          kubernetes.Interface
-	SourceNodeName  string
 	SourceClient    kubernetes.Interface
 	SourceNamespace string
 	DnsServers      []string
@@ -57,11 +54,10 @@ func NewPodController(conf PodControllerConfig) (*PodController, error) {
 	s := PodController{
 		clock:           clock.RealClock{},
 		subclusterName:  conf.SubclusterName,
-		nodeName:        conf.NodeName,
 		nodeIP:          conf.NodeIP,
 		nodePort:        conf.NodePort,
 		client:          conf.Client,
-		sourceNodeName:  conf.SourceNodeName,
+		nodeMapping:     conf.NodeMapping,
 		sourceClient:    conf.SourceClient,
 		sourceNamespace: conf.SourceNamespace,
 		dnsServers:      conf.DnsServers,
@@ -71,39 +67,44 @@ func NewPodController(conf PodControllerConfig) (*PodController, error) {
 }
 
 func (s *PodController) Start(ctx context.Context) error {
+	for nodeName, sourceNodeName := range s.nodeMapping {
+		err := s.start(ctx, nodeName, sourceNodeName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *PodController) start(ctx context.Context, nodeName string, sourceNodeName string) error {
 	cachePodsInformer := informer.NewInformer[*corev1.Pod, *corev1.PodList](s.client.CoreV1().Pods(""))
 	podsEvent := make(chan informer.Event[*corev1.Pod])
 	podsGetter, err := cachePodsInformer.WatchWithCache(ctx, informer.Option{
-		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", s.nodeName).String(),
+		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", nodeName).String(),
 	}, podsEvent)
 	if err != nil {
 		return err
 	}
 
-	s.cachePodsInformer = cachePodsInformer
-	s.podsGetter = podsGetter
-
 	srcCachePodsInformer := informer.NewInformer[*corev1.Pod, *corev1.PodList](s.sourceClient.CoreV1().Pods(s.sourceNamespace))
 	srcPodsEvent := make(chan informer.Event[*corev1.Pod])
 	srcPodsGetter, err := srcCachePodsInformer.WatchWithCache(ctx, informer.Option{
 		LabelSelector: labels.SelectorFromSet(map[string]string{
-			subletNodeKey:    s.nodeName,
+			subletNodeKey:    nodeName,
 			subletClusterKey: s.subclusterName,
 		}).String(),
-		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", s.sourceNodeName).String(),
+		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", sourceNodeName).String(),
 	}, srcPodsEvent)
 	if err != nil {
 		return err
 	}
-	s.srcCachePodsInformer = srcCachePodsInformer
-	s.srcPodsGetter = srcPodsGetter
 
 	go func() {
 		for pod := range podsEvent {
 			slog.Info("Pod Event", "type", pod.Type, "name", pod.Object.Name, "namespace", pod.Object.Namespace)
 			switch pod.Type {
 			case informer.Added, informer.Modified:
-				err := s.SyncPodToSource(ctx, pod.Object)
+				err := s.SyncPodToSource(ctx, pod.Object, srcPodsGetter, sourceNodeName)
 				if err != nil {
 					slog.Error("sync pod", "err", err)
 				}
@@ -123,7 +124,7 @@ func (s *PodController) Start(ctx context.Context) error {
 			slog.Info("Source Pod Event", "type", srcPod.Type, "name", srcPod.Object.Name, "namespace", srcPod.Object.Namespace)
 			switch srcPod.Type {
 			case informer.Added, informer.Modified:
-				err := s.SyncPodStatusFromSource(ctx, srcPod.Object)
+				err := s.SyncPodStatusFromSource(ctx, srcPod.Object, podsGetter)
 				if err != nil {
 					slog.Error("sync pod status from src", "err", err)
 				}
@@ -141,7 +142,7 @@ func (s *PodController) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) error {
+func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string, sourceNodeName string) error {
 	if srcPod.Labels == nil {
 		srcPod.Labels = map[string]string{}
 	}
@@ -149,11 +150,11 @@ func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) er
 		srcPod.Annotations = map[string]string{}
 	}
 	srcPod.Labels[subletNamespaceKey] = pod.Namespace
-	srcPod.Labels[subletNodeKey] = s.nodeName
+	srcPod.Labels[subletNodeKey] = pod.Spec.NodeName
 	srcPod.Labels[subletClusterKey] = s.subclusterName
 	srcPod.Name = name
 	srcPod.Namespace = s.sourceNamespace
-	srcPod.Spec.NodeName = s.sourceNodeName
+	srcPod.Spec.NodeName = sourceNodeName
 
 	if len(s.dnsServers) != 0 {
 		srcPod.Spec.DNSPolicy = corev1.DNSNone
@@ -170,7 +171,6 @@ func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) er
 		IP: s.nodeIP,
 		Hostnames: []string{
 			apiserverAddress,
-			s.nodeName,
 		},
 	})
 
@@ -253,7 +253,7 @@ func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string) er
 	return nil
 }
 
-func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) error {
+func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod, srcPodsGetter informer.Getter[*corev1.Pod], sourceNodeName string) error {
 	name := nameToSource(s.subclusterName, pod.Namespace, pod.Name)
 	if pod.DeletionTimestamp != nil {
 		err := s.sourceClient.CoreV1().Pods(s.sourceNamespace).Delete(ctx, name, metav1.DeleteOptions{})
@@ -269,10 +269,10 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 		}
 		return nil
 	}
-	srcPod, ok := s.srcPodsGetter.GetWithNamespace(name, s.sourceNamespace)
+	srcPod, ok := srcPodsGetter.GetWithNamespace(name, s.sourceNamespace)
 	if !ok {
 		srcPod = pod.DeepCopy()
-		err := s.syncPodToSource(pod, srcPod, name)
+		err := s.syncPodToSource(pod, srcPod, name, sourceNodeName)
 		if err != nil {
 			return err
 		}
@@ -285,7 +285,7 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 		if !apierrors.IsAlreadyExists(err) {
 			return err
 		}
-		srcPod, ok = s.srcPodsGetter.GetWithNamespace(name, s.sourceNamespace)
+		srcPod, ok = srcPodsGetter.GetWithNamespace(name, s.sourceNamespace)
 		if !ok {
 			srcPod, err = s.sourceClient.CoreV1().Pods(s.sourceNamespace).Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
@@ -297,7 +297,7 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 	pod = pod.DeepCopy()
 	srcPod = srcPod.DeepCopy()
 	srcPod.Spec = pod.Spec
-	err := s.syncPodToSource(pod, srcPod, name)
+	err := s.syncPodToSource(pod, srcPod, name, sourceNodeName)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func (s *PodController) SyncPodToSource(ctx context.Context, pod *corev1.Pod) er
 	return nil
 }
 
-func (s *PodController) SyncPodStatusFromSource(ctx context.Context, srcPod *corev1.Pod) error {
+func (s *PodController) SyncPodStatusFromSource(ctx context.Context, srcPod *corev1.Pod, podsGetter informer.Getter[*corev1.Pod]) error {
 	subclusterName, namespace, name, err := nameFromSource(srcPod.Name)
 	if err != nil {
 		return err
@@ -334,7 +334,7 @@ func (s *PodController) SyncPodStatusFromSource(ctx context.Context, srcPod *cor
 		}
 		return nil
 	}
-	pod, ok := s.podsGetter.GetWithNamespace(name, namespace)
+	pod, ok := podsGetter.GetWithNamespace(name, namespace)
 	if !ok {
 		pod, err = s.client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {

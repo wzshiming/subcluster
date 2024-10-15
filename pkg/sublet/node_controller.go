@@ -21,73 +21,73 @@ import (
 type NodeController struct {
 	clock clock.Clock
 
-	leaseController lease.Controller
-
-	nodeName string
-	client   kubernetes.Interface
+	nodeMapping map[string]string
+	client      kubernetes.Interface
 
 	nodePort int
 	nodeIP   string
 
-	sourceNodeName       string
-	sourceClient         kubernetes.Interface
-	srcCacheNodeInformer *informer.Informer[*corev1.Node, *corev1.NodeList]
-	srcNodeGetter        informer.Getter[*corev1.Node]
+	sourceClient kubernetes.Interface
 }
 
 type NodeControllerConfig struct {
-	NodePort       int
-	NodeIP         string
-	NodeName       string
-	Client         kubernetes.Interface
-	SourceNodeName string
-	SourceClient   kubernetes.Interface
+	NodePort     int
+	NodeIP       string
+	NodeMapping  map[string]string
+	Client       kubernetes.Interface
+	SourceClient kubernetes.Interface
 }
 
 func NewNodeController(conf NodeControllerConfig) (*NodeController, error) {
 	s := NodeController{
-		clock:          clock.RealClock{},
-		nodeName:       conf.NodeName,
-		client:         conf.Client,
-		sourceNodeName: conf.SourceNodeName,
-		sourceClient:   conf.SourceClient,
-		nodePort:       conf.NodePort,
-		nodeIP:         conf.NodeIP,
+		clock:        clock.RealClock{},
+		nodeMapping:  conf.NodeMapping,
+		client:       conf.Client,
+		sourceClient: conf.SourceClient,
+		nodePort:     conf.NodePort,
+		nodeIP:       conf.NodeIP,
 	}
 	return &s, nil
 }
 
 func (s *NodeController) Start(ctx context.Context) error {
-	s.leaseController = lease.NewController(
+	for nodeName, sourceNodeName := range s.nodeMapping {
+		err := s.start(ctx, nodeName, sourceNodeName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *NodeController) start(ctx context.Context, nodeName string, sourceNodeName string) error {
+	leaseController := lease.NewController(
 		s.clock,
 		s.client,
-		s.nodeName,
-		40,
+		nodeName,
+		400,
 		nil,
-		10,
-		s.nodeName,
+		100,
+		nodeName,
 		corev1.NamespaceNodeLease,
-		setNodeOwnerFunc(s.client, s.nodeName))
+		setNodeOwnerFunc(s.client, nodeName))
 
-	go s.leaseController.Run(ctx)
+	go leaseController.Run(ctx)
 
 	srcCacheNodeInformer := informer.NewInformer[*corev1.Node, *corev1.NodeList](s.sourceClient.CoreV1().Nodes())
 	srcNodeEvent := make(chan informer.Event[*corev1.Node])
-	srcNodeGetter, err := srcCacheNodeInformer.WatchWithCache(ctx, informer.Option{
-		FieldSelector: fields.OneTermEqualSelector("metadata.name", s.sourceNodeName).String(),
+	_, err := srcCacheNodeInformer.WatchWithCache(ctx, informer.Option{
+		FieldSelector: fields.OneTermEqualSelector("metadata.name", sourceNodeName).String(),
 	}, srcNodeEvent)
 	if err != nil {
 		return err
 	}
 
-	s.srcCacheNodeInformer = srcCacheNodeInformer
-	s.srcNodeGetter = srcNodeGetter
-
 	go func() {
 		for srcNode := range srcNodeEvent {
 			switch srcNode.Type {
 			case informer.Added, informer.Modified, informer.Sync:
-				err := s.SyncNodeFromSource(ctx, srcNode.Object)
+				err := s.SyncNodeFromSource(ctx, srcNode.Object, nodeName)
 				if err != nil {
 					slog.Error("sync node", "err", err)
 				}
@@ -99,7 +99,7 @@ func (s *NodeController) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.Node) error {
+func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.Node, nodeName string) error {
 	node = node.DeepCopy()
 
 	if s.nodeIP != "" {
@@ -113,14 +113,14 @@ func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.No
 	}
 
 	nodeClient := s.client.CoreV1().Nodes()
-	dstNode, err := nodeClient.Get(ctx, s.nodeName, metav1.GetOptions{})
+	dstNode, err := nodeClient.Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
 		dstNode = &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:        s.nodeName,
+				Name:        nodeName,
 				Labels:      node.Labels,
 				Annotations: node.Annotations,
 			},

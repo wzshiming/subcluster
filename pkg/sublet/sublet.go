@@ -24,12 +24,13 @@ type Sublet struct {
 }
 
 type Config struct {
-	NodePort        int
-	NodeIP          string
-	SubclusterName  string
-	NodeName        string
+	NodePort       int
+	NodeIP         string
+	SubclusterName string
+
+	NodeMapping map[string]string
+
 	Client          kubernetes.Interface
-	SourceNodeName  string
 	SourceClient    kubernetes.Interface
 	SourceNamespace string
 	DnsServers      []string
@@ -38,12 +39,11 @@ type Config struct {
 
 func NewSublet(conf Config) (*Sublet, error) {
 	node, err := NewNodeController(NodeControllerConfig{
-		NodeName:       conf.NodeName,
-		NodePort:       conf.NodePort,
-		NodeIP:         conf.NodeIP,
-		Client:         conf.Client,
-		SourceNodeName: conf.SourceNodeName,
-		SourceClient:   conf.SourceClient,
+		NodeMapping:  conf.NodeMapping,
+		NodePort:     conf.NodePort,
+		NodeIP:       conf.NodeIP,
+		Client:       conf.Client,
+		SourceClient: conf.SourceClient,
 	})
 	if err != nil {
 		return nil, err
@@ -51,11 +51,10 @@ func NewSublet(conf Config) (*Sublet, error) {
 
 	pod, err := NewPodController(PodControllerConfig{
 		SubclusterName:  conf.SubclusterName,
-		NodeName:        conf.NodeName,
+		NodeMapping:     conf.NodeMapping,
 		NodePort:        conf.NodePort,
 		NodeIP:          conf.NodeIP,
 		Client:          conf.Client,
-		SourceNodeName:  conf.SourceNodeName,
 		SourceClient:    conf.SourceClient,
 		SourceNamespace: conf.SourceNamespace,
 		DnsServers:      conf.DnsServers,

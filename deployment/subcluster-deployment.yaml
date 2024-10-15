@@ -23,11 +23,10 @@ spec:
         args:
         - --kubeconfig=/root/.kube/config
         - --name=sublet
-        - --node-name=subnode
         - --node-ip=$(POD_IP)
         - --node-port=7878
         - --source-kubeconfig=/root/.kube/source-config
-        - --source-node-name=$(NODE_NAME)
+        - --node-mapping=subnode-0=$(NODE_NAME),subnode-1=$(NODE_NAME),subnode-2=$(NODE_NAME)
         - --source-namespace=$(POD_NAMESPACE)
         - --dns-servers=$(POD_IP)
         - --dns-searches=svc.cluster.local
