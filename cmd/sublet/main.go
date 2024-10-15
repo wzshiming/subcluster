@@ -24,7 +24,6 @@ var (
 
 	kubeConfigPath string
 	dnsServers     []string
-	dnsSearches    []string
 
 	sourceKubeConfigPath string
 	sourceNamespace      string
@@ -41,7 +40,6 @@ func init() {
 	pflag.StringVar(&sourceKubeConfigPath, "source-kubeconfig", "", "source kubeconfig path")
 	pflag.StringVar(&sourceNamespace, "source-namespace", "", "source namespace")
 	pflag.StringSliceVar(&dnsServers, "dns-servers", dnsServers, "dns servers")
-	pflag.StringSliceVar(&dnsSearches, "dns-searches", dnsSearches, "dns searches")
 
 	pflag.StringToStringVar(&nodeMapping, "node-mapping", map[string]string{}, "node mapping")
 
@@ -90,7 +88,6 @@ func main() {
 		SourceClient:    sourceClient,
 		SourceNamespace: sourceNamespace,
 		DnsServers:      dnsServers,
-		DnsSearches:     dnsSearches,
 		NodeIP:          nodeIP,
 		NodePort:        nodePort,
 	}

@@ -19,8 +19,10 @@ const (
 var deleteOpt = metav1.NewDeleteOptions(0)
 
 type Sublet struct {
-	node *NodeController
-	pod  *PodController
+	node      *NodeController
+	pod       *PodController
+	service   *ServiceController
+	endpoints *EndpointsController
 }
 
 type Config struct {
@@ -34,7 +36,6 @@ type Config struct {
 	SourceClient    kubernetes.Interface
 	SourceNamespace string
 	DnsServers      []string
-	DnsSearches     []string
 }
 
 func NewSublet(conf Config) (*Sublet, error) {
@@ -58,15 +59,33 @@ func NewSublet(conf Config) (*Sublet, error) {
 		SourceClient:    conf.SourceClient,
 		SourceNamespace: conf.SourceNamespace,
 		DnsServers:      conf.DnsServers,
-		DnsSearches:     conf.DnsSearches,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	service, err := NewServiceController(ServiceControllerConfig{
+		SubclusterName:  conf.SubclusterName,
+		Client:          conf.Client,
+		SourceClient:    conf.SourceClient,
+		SourceNamespace: conf.SourceNamespace,
+	})
+
+	endpoints, err := NewEndpointsController(EndpointsControllerConfig{
+		SubclusterName:  conf.SubclusterName,
+		Client:          conf.Client,
+		SourceClient:    conf.SourceClient,
+		SourceNamespace: conf.SourceNamespace,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	s := Sublet{
-		node: node,
-		pod:  pod,
+		node:      node,
+		pod:       pod,
+		service:   service,
+		endpoints: endpoints,
 	}
 	return &s, nil
 }
@@ -86,6 +105,19 @@ func nameFromSource(sourceName string) (subclusterName, namespace, name string, 
 	return subclusterName, namespace, name, nil
 }
 
+func svcNameToSource(name string) string {
+	return strings.Join([]string{subletPrefix, name}, "-")
+}
+
+func svcNameFromSource(sourceName string) (name string, err error) {
+	slice := strings.SplitN(sourceName, "-", 2)
+	if slice[0] != subletPrefix || len(slice) != 2 {
+		return "", fmt.Errorf("invalid sublet name: %s", sourceName)
+	}
+	name = slice[1]
+	return name, nil
+}
+
 func (s *Sublet) Start(ctx context.Context) error {
 	err := s.node.Start(ctx)
 	if err != nil {
@@ -97,5 +129,14 @@ func (s *Sublet) Start(ctx context.Context) error {
 		return err
 	}
 
+	err = s.service.Start(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = s.endpoints.Start(ctx)
+	if err != nil {
+		return err
+	}
 	return nil
 }

@@ -29,8 +29,6 @@ spec:
         - --node-mapping=subnode-0=$(NODE_NAME),subnode-1=$(NODE_NAME),subnode-2=$(NODE_NAME)
         - --source-namespace=$(POD_NAMESPACE)
         - --dns-servers=$(POD_IP)
-        - --dns-searches=svc.cluster.local
-        - --dns-searches=cluster.local
         volumeMounts:
         - mountPath: /root/.kube/config
           name: subcluster-config
@@ -76,7 +74,7 @@ spec:
         args:
         - --kube-apiserver-port=443
         - --extra-args=kube-apiserver=advertise-address=$(POD_IP)
-        - --extra-args=kube-apiserver=service-cluster-ip-range=$(POD_IP)/12
+        - --extra-args=kube-apiserver=service-cluster-ip-range=10.96.0.0/12
         env:
         - name: POD_IP
           valueFrom:

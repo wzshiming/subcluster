@@ -134,9 +134,9 @@ func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.No
 		return nil
 	}
 
-	if reflect.DeepEqual(dstNode.Spec, node.Spec) ||
-		reflect.DeepEqual(dstNode.Labels, node.Labels) ||
-		reflect.DeepEqual(dstNode.Annotations, node.Annotations) {
+	if !reflect.DeepEqual(dstNode.Spec, node.Spec) ||
+		!reflect.DeepEqual(dstNode.Labels, node.Labels) ||
+		!reflect.DeepEqual(dstNode.Annotations, node.Annotations) {
 		dstNode.Spec = node.Spec
 		dstNode.Labels = node.Labels
 		dstNode.Annotations = node.Annotations
@@ -145,7 +145,7 @@ func (s *NodeController) SyncNodeFromSource(ctx context.Context, node *corev1.No
 			return err
 		}
 	}
-	if reflect.DeepEqual(dstNode.Status, node.Status) {
+	if !reflect.DeepEqual(dstNode.Status, node.Status) {
 		dstNode.Status = node.Status
 		dstNode, err = s.client.CoreV1().Nodes().UpdateStatus(ctx, dstNode, metav1.UpdateOptions{})
 		if err != nil {

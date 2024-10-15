@@ -22,11 +22,11 @@ import (
 type PodController struct {
 	clock clock.Clock
 
-	subclusterName string
+	subclusterName  string
+	sourceNamespace string
 
-	client      kubernetes.Interface
-	dnsServers  []string
-	dnsSearches []string
+	client     kubernetes.Interface
+	dnsServers []string
 
 	nodeMapping map[string]string
 
@@ -34,8 +34,6 @@ type PodController struct {
 	nodeIP   string
 
 	sourceClient kubernetes.Interface
-
-	sourceNamespace string
 }
 
 type PodControllerConfig struct {
@@ -47,7 +45,6 @@ type PodControllerConfig struct {
 	SourceClient    kubernetes.Interface
 	SourceNamespace string
 	DnsServers      []string
-	DnsSearches     []string
 }
 
 func NewPodController(conf PodControllerConfig) (*PodController, error) {
@@ -61,7 +58,6 @@ func NewPodController(conf PodControllerConfig) (*PodController, error) {
 		sourceClient:    conf.SourceClient,
 		sourceNamespace: conf.SourceNamespace,
 		dnsServers:      conf.DnsServers,
-		dnsSearches:     conf.DnsSearches,
 	}
 	return &s, nil
 }
@@ -160,8 +156,11 @@ func (s *PodController) syncPodToSource(pod, srcPod *corev1.Pod, name string, so
 		srcPod.Spec.DNSPolicy = corev1.DNSNone
 		srcPod.Spec.DNSConfig = &corev1.PodDNSConfig{}
 		srcPod.Spec.DNSConfig.Nameservers = s.dnsServers
-		if len(s.dnsSearches) != 0 {
-			srcPod.Spec.DNSConfig.Searches = s.dnsSearches
+
+		srcPod.Spec.DNSConfig.Searches = []string{
+			pod.Namespace + ".svc.cluster.local",
+			"svc.cluster.local",
+			"cluster.local",
 		}
 	}
 
